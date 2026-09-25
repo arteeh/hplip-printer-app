@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <pthread.h>
 #include <fcntl.h>
 #include <linux/fs.h>
 
@@ -87,12 +88,11 @@
 
 // Serializes HP plugin install/update operations. Two web-admin plugin
 // installation requests must not operate on the same plugin_tmp staging
-// directory and plugin state at the same time. A GMutex (from GLib, pulled
-// in through pappl-retrofit.h) is non-recursive and available on every
-// supported GLib, so the busy check in the web handler uses the non-blocking
-// g_mutex_trylock() and reports a busy state instead of overlapping the
-// mutation. The startup auto-update uses the blocking g_mutex_lock().
-static GMutex plugin_install_mutex;
+// directory and plugin state at the same time. The busy check in the web
+// handler uses the non-blocking pthread_mutex_trylock() and reports a busy
+// state instead of overlapping the mutation. The startup auto-update uses
+// the blocking pthread_mutex_lock().
+static pthread_mutex_t plugin_install_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 //
@@ -1321,7 +1321,7 @@ hplip_web_plugin(
       // another request already holds the lock, report a busy state instead
       // of overlapping the mutation (acceptance criteria #1).
       plugin_locked = 1;
-      if (!g_mutex_trylock(&plugin_install_mutex))
+      if (pthread_mutex_trylock(&plugin_install_mutex) != 0)
       {
 	plugin_locked = 0;
 	status = "A plugin installation is already running. Please wait a moment and try again.";
@@ -1409,7 +1409,7 @@ hplip_web_plugin(
       // in-flight install that is mid-rename on the same plugin/ path, so it
       // takes the same lock as install (acceptance criteria #1).
       plugin_locked = 1;
-      if (!g_mutex_trylock(&plugin_install_mutex))
+      if (pthread_mutex_trylock(&plugin_install_mutex) != 0)
       {
         plugin_locked = 0;
         status = "A plugin installation is already running. Please wait a moment and try again.";
@@ -1453,7 +1453,7 @@ hplip_web_plugin(
       // License declined
       // Remove downloaded and uncompressed plugin (plugin_tmp), but never
       // while another request is installing from that staging directory.
-      if (!g_mutex_trylock(&plugin_install_mutex))
+      if (pthread_mutex_trylock(&plugin_install_mutex) != 0)
       {
 	status = "A plugin installation is already running. Please wait a moment and try again.";
       }
@@ -1754,7 +1754,7 @@ hplip_web_plugin(
  clean_up:
   // Clean up
   if (plugin_locked)
-    g_mutex_unlock(&plugin_install_mutex);
+    pthread_mutex_unlock(&plugin_install_mutex);
   if (plugin_dir)
     free(plugin_dir);
   if (licensetext)
@@ -1802,7 +1802,7 @@ hplip_plugin_support(void *data)
       // Serialize against web-admin install/update requests (see
       // hplip_web_plugin). The startup auto-update blocks until the lock
       // is free.
-      g_mutex_lock(&plugin_install_mutex);
+      pthread_mutex_lock(&plugin_install_mutex);
       papplLog(system, PAPPL_LOGLEVEL_DEBUG,
 	       "Updating an already installed proprietary plugin ...");
       if ((plugin_dir = hplip_download_plugin(system)) == NULL)
@@ -1824,7 +1824,7 @@ hplip_plugin_support(void *data)
 
 	free(plugin_dir);
       }
-      g_mutex_unlock(&plugin_install_mutex);
+      pthread_mutex_unlock(&plugin_install_mutex);
     }
   }
 
