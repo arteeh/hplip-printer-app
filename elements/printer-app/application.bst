@@ -7,6 +7,10 @@ sources:
   - kind: local
     path: hplip-printer-app.c
   - kind: local
+    path: hplip-plugin-verify.c
+  - kind: local
+    path: hplip-plugin-verify.h
+  - kind: local
     path: hplip-printer-app.1
   - kind: local
     path: hplip-printer-app.service

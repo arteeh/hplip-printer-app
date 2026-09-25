@@ -620,7 +620,8 @@ persistent state volume. No root privileges or install-time keyserver access
 are needed for verification. Snap uses its existing persistent `STATE_DIR`
 and the key inside the Snap.
 
-The Rock and Snap recipes already install Debian HPLIP's public key. Native
+The OCI image and the Rock and Snap recipes already install Debian HPLIP's
+public key. Native
 packagers must also supply it; `HPLIP_SIGNING_KEY` and `HPLIP_APP_STATE_DIR` are
 Makefile overrides for nonstandard paths. The currently pinned primary
 fingerprint is `4ABA2F66DBD5A95894910E0673D770CDA59047B9`, as documented in

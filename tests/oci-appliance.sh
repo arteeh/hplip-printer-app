@@ -70,7 +70,14 @@ podman exec "$name" /usr/bin/bash -c '
   test "$(id -u):$(id -g)" = 65532:65532
   test -d /var/lib/hplip-printer-app/ppd
   test -d /var/lib/hplip-printer-app/cups/ssl
-  test -s /var/lib/hplip-printer-app/pubring.kbx
+  # The plugin verifier imports the packaged key offline into a private
+  # 0700 home on the volume; it must be the pinned HP primary key.
+  gnupg=/var/lib/hplip-printer-app/plugin-gnupg-smoke
+  mkdir -m 0700 "$gnupg"
+  gpg --no-options --batch --no-tty --no-autostart --homedir "$gnupg" --status-fd 1 \
+    --import -- /usr/share/hplip/signing-key.asc |
+    grep "^\[GNUPG:\] IMPORT_OK [0-9]* 4ABA2F66DBD5A95894910E0673D770CDA59047B9" >/dev/null
+  rm -rf "$gnupg"
   test -s /var/lib/hplip-printer-app/usb/org.cups.usb-quirks
 '
 
