@@ -23,6 +23,7 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <pthread.h>
 #include <fcntl.h>
 #include <linux/fs.h>
 
@@ -80,6 +81,18 @@
 
 #define PLUGIN_CONF_URL "https://hplip.sf.net/plugin.conf"
 #define PLUGIN_ALT_LOCATION "https://developers.hp.com/sites/default/files"
+
+//
+// Global state...
+//
+
+// Serializes HP plugin install/update operations. Two web-admin plugin
+// installation requests must not operate on the same plugin_tmp staging
+// directory and plugin state at the same time. The busy check in the web
+// handler uses the non-blocking pthread_mutex_trylock() and reports a busy
+// state instead of overlapping the mutation. The startup auto-update uses
+// the blocking pthread_mutex_lock().
+static pthread_mutex_t plugin_install_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 
 //
@@ -1269,6 +1282,7 @@ hplip_web_plugin(
   char                *plugin_dir = NULL;
   char                buf[2048];
   char                *licensetext = NULL;
+  int                 plugin_locked = 0;
   FILE                *fp;
   size_t              size_needed;
 
@@ -1302,10 +1316,23 @@ hplip_web_plugin(
 	     !strcmp(action, "install-plugin-yes") ||
 	     !strcmp(action, "license-accepted"))
     {
-      // Set status to trigger the "Are you sure?" page when we
-      // re-install over an already installed and ip-to-date plugin
-      status = "Installing plugin";
-      if (strcmp(action, "license-accepted") &&
+      // Serialize plugin install/update: only one request may mutate the
+      // plugin_tmp staging directory and the plugin state at a time. If
+      // another request already holds the lock, report a busy state instead
+      // of overlapping the mutation (acceptance criteria #1).
+      plugin_locked = 1;
+      if (pthread_mutex_trylock(&plugin_install_mutex) != 0)
+      {
+	plugin_locked = 0;
+	status = "A plugin installation is already running. Please wait a moment and try again.";
+      }
+      else
+      {
+	// Set status to trigger the "Are you sure?" page when we
+	// re-install over an already installed and up-to-date plugin
+	status = "Installing plugin";
+      }
+      if (plugin_locked && strcmp(action, "license-accepted") &&
 	  (plugin_status != HPLIP_PLUGIN_INSTALLED ||
 	   !strcmp(action, "install-plugin-yes")))
       {
@@ -1334,9 +1361,10 @@ hplip_web_plugin(
 	  // Failed, get back to plugin status page
 	  status = "Plugin download failed.";
       }
-      if (plugin_status == HPLIP_PLUGIN_OUTDATED ||
-	  !strcmp(action, "install-plugin-yes") ||
-	  !strcmp(action, "license-accepted"))
+      if (plugin_locked &&
+	  (plugin_status == HPLIP_PLUGIN_OUTDATED ||
+	   !strcmp(action, "install-plugin-yes") ||
+	   !strcmp(action, "license-accepted")))
       {
 	// Install the plugin
 	// If failed, get back to plugin status page
@@ -1377,6 +1405,17 @@ hplip_web_plugin(
     }
     else if (!strcmp(action, "remove-plugin-yes"))
     {
+      // Serialize plugin removal with install/update: a remove can race an
+      // in-flight install that is mid-rename on the same plugin/ path, so it
+      // takes the same lock as install (acceptance criteria #1).
+      plugin_locked = 1;
+      if (pthread_mutex_trylock(&plugin_install_mutex) != 0)
+      {
+        plugin_locked = 0;
+        status = "A plugin installation is already running. Please wait a moment and try again.";
+      }
+      else
+      {
       // Remove the plugin
       // If failed, get back to plugin status page
       status = "Plugin removal failed.";
@@ -1406,25 +1445,35 @@ hplip_web_plugin(
 	  papplLog(system, PAPPL_LOGLEVEL_ERROR,
 		   "Could not find/the directory with the installed plugin.");
       }
+      }
     }
 #endif
     else if (!strcmp(action, "license-declined"))
     {
       // License declined
-      // Remove downloaded and uncompressed plugin (plugin_tmp)
-      if (!plugin_dir)
-	plugin_dir = hplip_get_uncompress_dir(system, 0);
-      if (plugin_dir)
+      // Remove downloaded and uncompressed plugin (plugin_tmp), but never
+      // while another request is installing from that staging directory.
+      if (pthread_mutex_trylock(&plugin_install_mutex) != 0)
       {
-	if (hplip_remove_uncompress_dir(system, "plugin_tmp") == 0)
-	{
-	  papplLog(system, PAPPL_LOGLEVEL_ERROR,
-		   "Unable to remove plugin directory %s/plugin_tmp",
-		   plugin_dir);
-	}
+	status = "A plugin installation is already running. Please wait a moment and try again.";
       }
-      // Set status to get back onto plugin status page
-      status = "License declined, plugin not installed.";
+      else
+      {
+	plugin_locked = 1;
+	if (!plugin_dir)
+	  plugin_dir = hplip_get_uncompress_dir(system, 0);
+	if (plugin_dir)
+	{
+	  if (hplip_remove_uncompress_dir(system, "plugin_tmp") == 0)
+	  {
+	    papplLog(system, PAPPL_LOGLEVEL_ERROR,
+		     "Unable to remove plugin directory %s/plugin_tmp",
+		     plugin_dir);
+	  }
+	}
+	// Set status to get back onto plugin status page
+	status = "License declined, plugin not installed.";
+      }
     }
     else if (!strcmp(action, "install-cancel"))
     {
@@ -1704,6 +1753,8 @@ hplip_web_plugin(
 
  clean_up:
   // Clean up
+  if (plugin_locked)
+    pthread_mutex_unlock(&plugin_install_mutex);
   if (plugin_dir)
     free(plugin_dir);
   if (licensetext)
@@ -1748,6 +1799,10 @@ hplip_plugin_support(void *data)
     // Snap needs root; the OCI appliance modifies only its user-owned volume.
     if (HPLIP_CAN_INSTALL_PLUGIN)
     {
+      // Serialize against web-admin install/update requests (see
+      // hplip_web_plugin). The startup auto-update blocks until the lock
+      // is free.
+      pthread_mutex_lock(&plugin_install_mutex);
       papplLog(system, PAPPL_LOGLEVEL_DEBUG,
 	       "Updating an already installed proprietary plugin ...");
       if ((plugin_dir = hplip_download_plugin(system)) == NULL)
@@ -1769,6 +1824,7 @@ hplip_plugin_support(void *data)
 
 	free(plugin_dir);
       }
+      pthread_mutex_unlock(&plugin_install_mutex);
     }
   }
 
