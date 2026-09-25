@@ -1,0 +1,52 @@
+name: HP plugin signature verification
+
+on:
+  pull_request:
+    branches: [testing]
+  push:
+    branches: [testing]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch official verification fixtures (never execute the archive)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The runtime UID cannot traverse the runner's home, so everything
+          # the test reads lives in a world-readable directory under /tmp.
+          fixtures=/tmp/hp-verify/fixtures
+          install -d -m 0755 /tmp/hp-verify "$fixtures" /tmp/hp-verify/src
+          cp -r tests hplip-plugin-verify.c hplip-plugin-verify.h /tmp/hp-verify/src/
+          curl --fail --location --proto '=https' --proto-redir '=https' --retry 3 \
+            https://salsa.debian.org/printing-team/hplip.v2/-/raw/f27f786d5f1060cce7c92e42488bd5e5d00ba135/debian/upstream/signing-key.asc \
+            -o "$fixtures/signing-key.asc"
+          for suffix in run run.asc; do
+            curl --fail --location --proto '=https' --proto-redir '=https' --retry 3 \
+              "https://www.openprinting.org/download/printdriver/auxfiles/HP/plugins/hplip-3.22.10-plugin.$suffix" \
+              -o "$fixtures/plugin.$suffix"
+          done
+          chmod -R a+rX /tmp/hp-verify
+      - name: Verify offline as the OCI runtime UID
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixtures=/tmp/hp-verify/fixtures
+          cd /tmp
+          # All verification, including first key import, runs without networking.
+          sudo unshare --net -- setpriv --reuid=65532 --regid=65532 --clear-groups \
+            env HP_PLUGIN="$fixtures/plugin.run" \
+              HP_PLUGIN_SIGNATURE="$fixtures/plugin.run.asc" \
+              HP_SIGNING_KEY="$fixtures/signing-key.asc" \
+              python3 /tmp/hp-verify/src/tests/test-plugin-verification.py
+      - name: Remove proprietary test bytes
+        if: always()
+        run: rm -rf /tmp/hp-verify

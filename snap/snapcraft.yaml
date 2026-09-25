@@ -753,6 +753,7 @@ parts:
       - LDFLAGS="$LDFLAGS -ljpeg"
       - SNAP=1
       - VERSION="$VERSION"
+      - HPLIP_SIGNING_KEY=/snap/hplip-printer-app/current/usr/share/hplip/signing-key.asc
       - HPLIP_CONF_DIR=/snap/hplip-printer-app/current/etc/hp
       - HPLIP_PLUGIN_STATE_DIR=/var/snap/hplip-printer-app/common/var
       - HPLIP_PLUGIN_ALT_DIR=/var/snap/hplip-printer-app/common
@@ -780,8 +781,8 @@ parts:
       set -eux
       make clean
       VERSION="`craftctl get version`"
-      make -j"8" LDFLAGS="$LDFLAGS -ljpeg" SNAP=1 VERSION="$VERSION" HPLIP_CONF_DIR=/snap/hplip-printer-app/current/etc/hp HPLIP_PLUGIN_STATE_DIR=/var/snap/hplip-printer-app/common/var HPLIP_PLUGIN_ALT_DIR=/var/snap/hplip-printer-app/common
-      make -j"8" install LDFLAGS="$LDFLAGS -ljpeg" SNAP=1 VERSION="$VERSION" HPLIP_CONF_DIR=/snap/hplip-printer-app/current/etc/hp HPLIP_PLUGIN_STATE_DIR=/var/snap/hplip-printer-app/common/var HPLIP_PLUGIN_ALT_DIR=/var/snap/hplip-printer-app/common DESTDIR="$CRAFT_PART_INSTALL"
+      make -j"8" LDFLAGS="$LDFLAGS -ljpeg" SNAP=1 VERSION="$VERSION" HPLIP_SIGNING_KEY=/snap/hplip-printer-app/current/usr/share/hplip/signing-key.asc HPLIP_CONF_DIR=/snap/hplip-printer-app/current/etc/hp HPLIP_PLUGIN_STATE_DIR=/var/snap/hplip-printer-app/common/var HPLIP_PLUGIN_ALT_DIR=/var/snap/hplip-printer-app/common
+      make -j"8" install LDFLAGS="$LDFLAGS -ljpeg" SNAP=1 VERSION="$VERSION" HPLIP_SIGNING_KEY=/snap/hplip-printer-app/current/usr/share/hplip/signing-key.asc HPLIP_CONF_DIR=/snap/hplip-printer-app/current/etc/hp HPLIP_PLUGIN_STATE_DIR=/var/snap/hplip-printer-app/common/var HPLIP_PLUGIN_ALT_DIR=/var/snap/hplip-printer-app/common DESTDIR="$CRAFT_PART_INSTALL"
       #craftctl default
     build-packages:
       - libusb-1.0-0-dev

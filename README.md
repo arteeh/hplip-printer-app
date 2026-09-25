@@ -615,3 +615,48 @@ The HP PCL Printer Application is Copyright © 2019-2020 by Michael R Sweet.
 This software is licensed under the Apache License Version 2.0 with an exception
 to allow linking against GPL2/LGPL2 software (like older versions of CUPS).  See
 the files "LICENSE" and "NOTICE" for more information.
+
+### HP plugin signature verification
+
+Plugin downloads are verified before the self-extracting archive is executed.
+The verifier imports the packaged `/usr/share/hplip/signing-key.asc` into
+`$STATE_DIR/plugin-gnupg` (default `/var/lib/hplip-printer-app/plugin-gnupg`).
+This directory must belong to the application's runtime UID and have mode
+0700. Its parent must already exist and be writable by that UID on the
+persistent state volume. No root privileges or install-time keyserver access
+are needed for verification. Snap uses its existing persistent `STATE_DIR`
+and the key inside the Snap.
+
+The OCI image and the Rock and Snap recipes already install Debian HPLIP's
+public key. Native
+packagers must also supply it; `HPLIP_SIGNING_KEY` and `HPLIP_APP_STATE_DIR` are
+Makefile overrides for nonstandard paths. The currently pinned primary
+fingerprint is `4ABA2F66DBD5A95894910E0673D770CDA59047B9`, as documented in
+[upstream's plugin verifier](https://github.com/OpenPrinting/hplip-printer-app/blob/master/hplip-printer-app.c).
+An unrelated key in the persistent keyring cannot authorize a plugin. Missing
+keys, changed payloads/signatures, expired or revoked signatures/keys, and GPG
+errors fail closed before extraction and installation. User GPG configuration
+is ignored. A future HP key rotation requires reviewing HP's authorization and
+updating the fingerprint and packaged key together; do not disable verification.
+
+Run the cryptographic regression tests with a C compiler, Python 3, GnuPG and
+`gpgconf` installed:
+
+```sh
+python3 tests/test-plugin-verification.py
+```
+
+To include official bytes already downloaded from HP's OpenPrinting mirror:
+
+```sh
+HP_PLUGIN=/path/to/hplip-3.22.10-plugin.run \
+HP_PLUGIN_SIGNATURE=/path/to/hplip-3.22.10-plugin.run.asc \
+HP_SIGNING_KEY=/usr/share/hplip/signing-key.asc \
+python3 tests/test-plugin-verification.py
+```
+
+The dedicated CI workflow downloads these test inputs, then runs verification
+without networking as UID 65532. It never executes the archive or publishes
+its proprietary bytes. These tests cover the production verifier; they do not
+replace OCI web-consent, restart, and print-to-socket-sink integration testing
+for the runtime tracked in issues #3 and #9. Physical output needs hardware.

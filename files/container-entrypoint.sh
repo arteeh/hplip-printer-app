@@ -38,10 +38,6 @@ export TESTPAGE_DIR=/usr/share/hplip-printer-app
 export TMPDIR=/tmp
 export USB_QUIRK_DIR="$state"
 
-# Only HP's public signing key is in the image; downloaded proprietary files
-# and the keyring live in the user-owned persistent volume.
-gpg --batch --no-permission-warning --homedir "$state" --import /usr/share/hplip/signing-key.asc >/dev/null
-
 children=()
 stop_children() {
   local index pid
