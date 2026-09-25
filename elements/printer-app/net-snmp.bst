@@ -1,0 +1,23 @@
+kind: manual
+description: Build Net-SNMP for HPLIP network printer discovery.
+
+sources:
+  - kind: git_repo
+    url: github:net-snmp/net-snmp.git
+    track: v5.9.*
+    # source-tag: v5.9.4
+    ref: 7d38b8299e26708ee92c9fe1628e5a000bc23e17
+
+build-depends:
+  - ghostscript-fsdk.bst:freedesktop-sdk.bst:public-stacks/buildsystem-autotools.bst
+
+depends:
+  - ghostscript-fsdk.bst:freedesktop-sdk.bst:components/openssl.bst
+
+config:
+  configure-commands:
+    - ./configure --prefix=/usr --libdir="%{libdir}" --disable-agent --disable-applications --disable-manuals --disable-embedded-perl --without-perl-modules --with-default-snmp-version=3 --with-sys-contact=none --with-sys-location=none --with-logfile=/dev/null --with-persistent-directory=/var/lib/hplip-printer-app/snmp
+  build-commands:
+    - make -j2
+  install-commands:
+    - make DESTDIR="%{install-root}" install

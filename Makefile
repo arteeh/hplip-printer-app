@@ -46,7 +46,7 @@ ifndef PATCH
 PATCH		=	`echo $(VERSION) | perl -p -e 's/^\d+\D+\d+\D+(\d+).*$$/\1/'`
 endif
 ifndef PACKAGE
-PACKAGE		=	`echo $(VERSION) | perl -p -e 's/^\d+\D+\d+\D+\d+\D+(\d+).*$$/\1/'`
+PACKAGE		=	`echo $(VERSION) | perl -p -e 's/^\d+\D+\d+\D+\d+\D+(\d+).*$$/\1/; s/^\d+\.\d+\.\d+$$/0/'`
 endif
 endif
 ifdef MAJOR
@@ -63,6 +63,9 @@ CFLAGS		+=	-DSYSTEM_VERSION_ARR_3=$(PACKAGE)
 endif
 ifdef SNAP
 CFLAGS		+=	-DSNAP=$(SNAP)
+endif
+ifdef HPLIP_OCI
+CFLAGS          +=      -DHPLIP_OCI=1
 endif
 LDFLAGS		+=	$(OPTIM) `cups-config --ldflags`
 LIBS		+=	`pkg-config --libs pappl` `cups-config --image --libs` `pkg-config --libs libppd` `pkg-config --libs libcupsfilters` `pkg-config --libs libpappl-retrofit` `pkg-config --libs libcurl` `pkg-config --libs libcrypto`
