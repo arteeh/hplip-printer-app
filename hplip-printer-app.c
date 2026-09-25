@@ -1451,20 +1451,29 @@ hplip_web_plugin(
     else if (!strcmp(action, "license-declined"))
     {
       // License declined
-      // Remove downloaded and uncompressed plugin (plugin_tmp)
-      if (!plugin_dir)
-	plugin_dir = hplip_get_uncompress_dir(system, 0);
-      if (plugin_dir)
+      // Remove downloaded and uncompressed plugin (plugin_tmp), but never
+      // while another request is installing from that staging directory.
+      if (!g_mutex_trylock(&plugin_install_mutex))
       {
-	if (hplip_remove_uncompress_dir(system, "plugin_tmp") == 0)
-	{
-	  papplLog(system, PAPPL_LOGLEVEL_ERROR,
-		   "Unable to remove plugin directory %s/plugin_tmp",
-		   plugin_dir);
-	}
+	status = "A plugin installation is already running. Please wait a moment and try again.";
       }
-      // Set status to get back onto plugin status page
-      status = "License declined, plugin not installed.";
+      else
+      {
+	plugin_locked = 1;
+	if (!plugin_dir)
+	  plugin_dir = hplip_get_uncompress_dir(system, 0);
+	if (plugin_dir)
+	{
+	  if (hplip_remove_uncompress_dir(system, "plugin_tmp") == 0)
+	  {
+	    papplLog(system, PAPPL_LOGLEVEL_ERROR,
+		     "Unable to remove plugin directory %s/plugin_tmp",
+		     plugin_dir);
+	  }
+	}
+	// Set status to get back onto plugin status page
+	status = "License declined, plugin not installed.";
+      }
     }
     else if (!strcmp(action, "install-cancel"))
     {
