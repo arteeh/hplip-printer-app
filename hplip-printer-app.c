@@ -23,6 +23,8 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <dirent.h>
+#include <fcntl.h>
+#include <linux/fs.h>
 
 //
 // Constants...
@@ -68,9 +70,15 @@
   #define ARCH "UNSUPPORTED_ARCH"
 #endif
 
+#ifndef HPLIP_OCI
+#  define HPLIP_OCI 0
+#endif
+
+#define HPLIP_CAN_INSTALL_PLUGIN (HPLIP_OCI || !getuid())
+
 // Plugin download URLs
 
-#define PLUGIN_CONF_URL "http://hplip.sf.net/plugin.conf"
+#define PLUGIN_CONF_URL "https://hplip.sf.net/plugin.conf"
 #define PLUGIN_ALT_LOCATION "https://developers.hp.com/sites/default/files"
 
 
@@ -339,8 +347,7 @@ hplip_version(pappl_system_t *system)
 
 
 //
-// 'hplip_plugin_status()' - Read out the status of the installed p;lugin
-//                           from /var/lib/hp/hplip.state
+// 'hplip_plugin_status()' - Read the installed plugin's version from state.
 //
 
 hplip_plugin_status_t
@@ -362,14 +369,6 @@ hplip_plugin_status(pappl_system_t *system)
     return (status);
   }
 
-  // HACK FOR TESTING: If empty hplip.state is created, install the plugin
-  // also if it was not installed before
-  fseek(fp, 0L, SEEK_END);
-  if (ftell(fp) == 0)
-  {
-    fclose(fp);
-    return (HPLIP_PLUGIN_OUTDATED);
-  }
 
   plugin_version = get_config_value(fp, "plugin", "version");
   installed_status = get_config_value(fp, "plugin", "installed");
@@ -426,6 +425,12 @@ hplip_download_file(pappl_system_t *system, const char *url)
       return (NULL);
     }
 
+#if HPLIP_OCI
+    // The index and plugin must use authenticated transport in the OCI image.
+    curl_easy_setopt(curl, CURLOPT_PROTOCOLS_STR, "https");
+    curl_easy_setopt(curl, CURLOPT_REDIR_PROTOCOLS_STR, "https");
+#endif
+    curl_easy_setopt(curl, CURLOPT_FAILONERROR, 1L);
     // Download the file
     fp = fdopen(fd, "wb");
     curl_easy_setopt(curl, CURLOPT_URL, url);
@@ -710,6 +715,19 @@ hplip_download_plugin(pappl_system_t *system)
   }
 
   fclose(fp);
+#if HPLIP_OCI
+  // HP's index still advertises HTTP for older releases. Upgrade its known
+  // OpenPrinting mirror before downloading, and reject other plaintext URLs.
+  if (!strncasecmp(url, "http://www.openprinting.org/",
+                   sizeof("http://www.openprinting.org/") - 1))
+  {
+    char *secure_url = NULL;
+    if (asprintf(&secure_url, "https://%s", url + 7) < 0)
+      goto out;
+    free(url);
+    url = secure_url;
+  }
+#endif
 
   // Download the plugin file
   buf[0] = '\0';
@@ -893,11 +911,10 @@ hplip_download_plugin(pappl_system_t *system)
 }
 
 
-#ifdef SNAP
+#if defined(SNAP) || HPLIP_OCI
 //
-// 'hplip_register_plugin() - Register the plugin installation or
-//                            removal in the hplip,state file (in the
-//                            Snap only).
+// 'hplip_register_plugin()' - Record plugin install/removal in persistent
+//                              state for Snap and the rootless OCI appliance.
 //
 
 int
@@ -905,7 +922,7 @@ hplip_register_plugin(pappl_system_t *system, const char *installed,
 		      const char *eula, const char *version)
 {
   int ret = 0;
-  char buf[1024];
+  char buf[1024], tempfile[1024] = "";
   char *filebuf = NULL;
   int size_needed;
   FILE *fp;
@@ -948,37 +965,42 @@ hplip_register_plugin(pappl_system_t *system, const char *installed,
       set_config_value(&filebuf, "plugin", "eula", eula) +
       set_config_value(&filebuf, "plugin", "version", version) > 0)
   {
-    // File has changed, rewrite it
-    // Remove the old file
-    if (unlink(buf) != 0 && errno != ENOENT)
-    {
-      papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	       "Unable to delete old HPLIP plugin status file %s: %s",
-	       buf, strerror(errno));
-      free(filebuf);
-      goto out;
-    }
+    // Keep the previous status intact until the replacement is complete.
+    int fd;
+    size_t length = strlen(filebuf);
 
-    // Write new file
-    if ((fp = fopen(buf, "w")) == NULL)
+    snprintf(tempfile, sizeof(tempfile), "%s/.hplip.state.XXXXXX",
+             HPLIP_PLUGIN_STATE_DIR);
+    if ((fd = mkstemp(tempfile)) < 0)
     {
       papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	       "Unable to open HPLIP plugin status file %s: %s",
-	       buf, strerror(errno));
-      free(filebuf);
+               "Unable to create HPLIP plugin status file: %s", strerror(errno));
+      tempfile[0] = '\0';
       goto out;
     }
-    if (fwrite(filebuf, 1, strlen(filebuf), fp) != strlen(filebuf))
+    if ((fp = fdopen(fd, "w")) == NULL)
+    {
+      close(fd);
+      papplLog(system, PAPPL_LOGLEVEL_ERROR,
+               "Unable to open temporary HPLIP plugin status file: %s", strerror(errno));
+      goto out;
+    }
+    if (fwrite(filebuf, 1, length, fp) != length || fflush(fp) != 0 ||
+        fsync(fd) != 0)
     {
       papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	       "Unable to write to HPLIP plugin status file %s: %s",
-	       buf, strerror(errno));
-      free(filebuf);
+               "Unable to write HPLIP plugin status file: %s", strerror(errno));
       fclose(fp);
       goto out;
     }
-
-    fclose(fp);
+    if (fclose(fp) != 0 || rename(tempfile, buf) != 0)
+    {
+      papplLog(system, PAPPL_LOGLEVEL_ERROR,
+               "Unable to install HPLIP plugin status file %s: %s",
+               buf, strerror(errno));
+      goto out;
+    }
+    tempfile[0] = '\0';
   }
 
   // Done
@@ -987,6 +1009,9 @@ hplip_register_plugin(pappl_system_t *system, const char *installed,
   ret = 1;
 
  out:
+  if (tempfile[0])
+    unlink(tempfile);
+  free(filebuf);
 
   return (ret);
 }
@@ -997,16 +1022,11 @@ hplip_register_plugin(pappl_system_t *system, const char *installed,
 // 'hplip_install_plugin() - Install the downloaded plugin, after the
 //                           license got accepted in the web
 //                           interface, or right after uncompressing
-//                           during an update. Use HP's Python script
-//                           installPlugin.py contained in the plugin
-//                           for a classic HPLIP installation and
-//                           simply rename the plugin_tmp directory to
-//                           plugin (deleting any old plugin/
-//                           directory first) and synlink the dynamic
-//                           link library (*.so) files of the system's
-//                           architecture for the Snap. The Printer
-//                           Application must run as root to install
-//                           the plugin.
+//                           during an update. Classic installations use
+//                           installPlugin.py; Snap and OCI rename the verified
+//                           plugin_tmp directory into persistent plugin state
+//                           and link the current architecture's libraries.
+//                           Snap needs root, while OCI uses its writable volume.
 //
 
 int
@@ -1014,15 +1034,14 @@ hplip_install_plugin(pappl_system_t *system, const char *plugin_dir)
 {
   int ret = 0;
 
-#ifdef SNAP
+#if defined(SNAP) || HPLIP_OCI
 
-  int len;
+  int len, had_plugin = 0, discard_tmp = 1;
   char buf1[1024], buf2[1024];
   DIR *d;
   struct dirent *entry;
-  char *p, *version, *filebuf = NULL;
-  int size_needed;
-  FILE *fp;
+  struct stat st;
+  char *p, *version = NULL;
 
   // Open the directory with the files of the uncompressed plugin
   len = snprintf(buf1, sizeof(buf1), "%s/plugin_tmp", plugin_dir);
@@ -1055,54 +1074,74 @@ hplip_install_plugin(pappl_system_t *system, const char *plugin_dir)
 	papplLog(system, PAPPL_LOGLEVEL_ERROR,
 		 "Could not create symboiic link %s to %s: %s",
 		 buf1, entry->d_name, strerror(errno));
+	closedir(d);
 	goto out;
       }
     }
   }
   closedir(d);
 
-  // Remove a previous version of the plugin
-  papplLog(system, PAPPL_LOGLEVEL_DEBUG,
-	   "Removing previous plugin version if present: %s/plugin",
-	   plugin_dir);
-  if (hplip_remove_uncompress_dir(system, "plugin") == 0)
-  {
-    papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "Unable to remove old plugin version %s/plugin", plugin_dir);
-    goto out;
-  }
-
-  // Rename the plugin directory from plugin_tmp to plugin
-  papplLog(system, PAPPL_LOGLEVEL_DEBUG,
-	   "Renaming plugin directory to %s/plugin", plugin_dir);
-  snprintf(buf1, sizeof(buf1), "%s/plugin_tmp", plugin_dir);
-  snprintf(buf2, sizeof(buf2), "%s/plugin", plugin_dir);
-  if (rename(buf1, buf2) != 0)
-  {
-    papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "Could not rename directory %s to %s: %s",
-	     buf1, buf2, strerror(errno));
-    goto out;
-  }
-
-  // Get HPLIP (and now also plugin) version
+  // Resolve the version before touching a working installation.
   if ((version = hplip_version(system)) == NULL)
   {
     papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "Unable to determine version of HPLIP");
+             "Unable to determine version of HPLIP");
     goto out;
   }
 
-  // Register installed plugin version in hplip.state
+  snprintf(buf1, sizeof(buf1), "%s/plugin_tmp", plugin_dir);
+  snprintf(buf2, sizeof(buf2), "%s/plugin", plugin_dir);
+  if (lstat(buf2, &st) == 0)
+  {
+    if (!S_ISDIR(st.st_mode))
+    {
+      papplLog(system, PAPPL_LOGLEVEL_ERROR,
+               "Existing plugin is not a directory: %s", buf2);
+      goto out;
+    }
+    // The previous plugin remains in plugin_tmp until status registration
+    // succeeds; an exchange leaves no gap in which no plugin is installed.
+    had_plugin = 1;
+    if (renameat2(AT_FDCWD, buf1, AT_FDCWD, buf2, RENAME_EXCHANGE) != 0)
+    {
+      papplLog(system, PAPPL_LOGLEVEL_ERROR,
+               "Unable to exchange plugin directories %s and %s: %s",
+               buf1, buf2, strerror(errno));
+      goto out;
+    }
+  }
+  else if (errno == ENOENT)
+  {
+    if (rename(buf1, buf2) != 0)
+    {
+      papplLog(system, PAPPL_LOGLEVEL_ERROR,
+               "Unable to install plugin directory %s: %s", buf2, strerror(errno));
+      goto out;
+    }
+  }
+  else
+  {
+    papplLog(system, PAPPL_LOGLEVEL_ERROR,
+             "Unable to inspect installed plugin %s: %s", buf2, strerror(errno));
+    goto out;
+  }
+
   if (!hplip_register_plugin(system, "1", "1", version))
   {
     papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "Unable to register HPLIP plugin installation status.");
-    free(version);
+             "Unable to register HPLIP plugin installation status.");
+    if ((had_plugin &&
+         renameat2(AT_FDCWD, buf1, AT_FDCWD, buf2, RENAME_EXCHANGE) != 0) ||
+        (!had_plugin && rename(buf2, buf1) != 0))
+    {
+      // Keep both directories for recovery if the rollback itself fails.
+      discard_tmp = 0;
+      papplLog(system, PAPPL_LOGLEVEL_ERROR,
+               "Unable to restore the previous plugin from %s: %s",
+               buf1, strerror(errno));
+    }
     goto out;
   }
-
-  free(version);
 
 #else
 
@@ -1122,7 +1161,7 @@ hplip_install_plugin(pappl_system_t *system, const char *plugin_dir)
     goto out;
   }
 
-#endif // SNAP
+#endif // SNAP || HPLIP_OCI
 
   // Done
   papplLog(system, PAPPL_LOGLEVEL_DEBUG,
@@ -1130,20 +1169,20 @@ hplip_install_plugin(pappl_system_t *system, const char *plugin_dir)
   ret = 1;
 
  out:
-
-  // Remove the uncompressed plugin file
-  hplip_remove_uncompress_dir(system, "plugin_tmp");
+#if defined(SNAP) || HPLIP_OCI
+  free(version);
+  if (discard_tmp)
+#endif
+    hplip_remove_uncompress_dir(system, "plugin_tmp");
 
   return (ret);
 }
 
 
-#ifdef SNAP
+#if defined(SNAP) || HPLIP_OCI
 //
-// 'hplip_remove_plugin() - Uninstall the installed plugin (in the
-//                          Snap only), by removing its directory and
-//                          unregistering its presence in the plugin
-//                          state file.
+// 'hplip_remove_plugin()' - Uninstall a Snap/OCI plugin from its persistent
+//                           state and unregister its installation status.
 //
 
 int
@@ -1248,8 +1287,8 @@ hplip_web_plugin(
 	   !strcmp(action, "install-plugin-yes")))
       {
 	// Download the plugin
-	// Plugin installation only works if we are running as root
-	if (!getuid())
+	// Snap needs root; the OCI appliance installs only into its user-owned volume.
+	if (HPLIP_CAN_INSTALL_PLUGIN)
         {
 	  papplLog(system, PAPPL_LOGLEVEL_DEBUG,
 		   "Downloading the proprietary plugin ...");
@@ -1279,8 +1318,8 @@ hplip_web_plugin(
 	// Install the plugin
 	// If failed, get back to plugin status page
 	status = "Plugin installation failed.";
-	// Plugin installation only works if we are running as root
-	if (!getuid())
+	// Snap needs root; the OCI appliance installs only into its user-owned volume.
+	if (HPLIP_CAN_INSTALL_PLUGIN)
         {
 	  papplLog(system, PAPPL_LOGLEVEL_DEBUG,
 		   "Installing the proprietary plugin ...");
@@ -1307,7 +1346,7 @@ hplip_web_plugin(
 	}
       }
     }
-#if SNAP
+#if defined(SNAP) || HPLIP_OCI
     else if (!strcmp(action, "remove-plugin"))
     {
       // Only set status to trigger the "Are you sure?" page
@@ -1318,8 +1357,8 @@ hplip_web_plugin(
       // Remove the plugin
       // If failed, get back to plugin status page
       status = "Plugin removal failed.";
-      // Plugin installation only works if we are running as root
-      if (!getuid())
+      // Snap needs root; the OCI appliance modifies only its user-owned volume.
+      if (HPLIP_CAN_INSTALL_PLUGIN)
       {
 	papplLog(system, PAPPL_LOGLEVEL_DEBUG,
 		 "Removing the proprietary plugin ...");
@@ -1370,7 +1409,7 @@ hplip_web_plugin(
       // Only set status to get back onto plugin status page
       status = "Plugin not re-installed.";
     }
-#if SNAP
+#if defined(SNAP) || HPLIP_OCI
     else if (!strcmp(action, "remove-cancel"))
     {
       // "Are you sure?" on remove canceled
@@ -1392,7 +1431,7 @@ hplip_web_plugin(
   else if (plugin_status != HPLIP_PLUGIN_NOT_INSTALLED)
   {
     // Load license text from installed plugin
-#if SNAP
+#if defined(SNAP) || HPLIP_OCI
     if (!plugin_dir)
       plugin_dir = hplip_get_uncompress_dir(system, 0);
     snprintf(buf, sizeof(buf), "%s/plugin/license.txt", plugin_dir);
@@ -1531,7 +1570,7 @@ hplip_web_plugin(
 			"          </table>\n"
 			"        </form>\n");
   }
-#if SNAP
+#if defined(SNAP) || HPLIP_OCI
   else if (status && strcasestr(status, "removing"))
   {
     // Ask the user whether he is sure to remove the plugin
@@ -1612,7 +1651,7 @@ hplip_web_plugin(
 			     (plugin_status == HPLIP_PLUGIN_OUTDATED ?
 			      "Update Plugin" :
 			      "Install/Update Plugin")));
-#if SNAP
+#if defined(SNAP) || HPLIP_OCI
       if (plugin_status != HPLIP_PLUGIN_NOT_INSTALLED)
 	papplClientHTMLPuts(client, "&nbsp;<button type=\"submit\" name=\"action\" value=\"remove-plugin\">Remove Plugin</button>");
 #endif // SNAP
@@ -1683,8 +1722,8 @@ hplip_plugin_support(void *data)
   {
     // We need to update the plugin
 
-    // Plugin installation only works if we are running as root
-    if (!getuid())
+    // Snap needs root; the OCI appliance modifies only its user-owned volume.
+    if (HPLIP_CAN_INSTALL_PLUGIN)
     {
       papplLog(system, PAPPL_LOGLEVEL_DEBUG,
 	       "Updating an already installed proprietary plugin ...");
@@ -1715,8 +1754,8 @@ hplip_plugin_support(void *data)
 				 (pappl_resource_cb_t)hplip_web_plugin,
 				 global_data);
   papplSystemAddLink(system,
-		     getuid() ? "Proprietary Plugin Status" :
-		     "Install Proprietary Plugin",
+		     HPLIP_CAN_INSTALL_PLUGIN ? "Install Proprietary Plugin" :
+		     "Proprietary Plugin Status",
 		     "/plugin",
 		     PAPPL_LOPTIONS_OTHER | PAPPL_LOPTIONS_HTTPS_REQUIRED);
 }

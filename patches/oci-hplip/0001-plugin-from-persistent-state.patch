@@ -1,0 +1,58 @@
+diff --git a/common/utils.h b/common/utils.h
+--- a/common/utils.h
++++ b/common/utils.h
+@@ -25,7 +25,7 @@
+ #define SCAN_PLUGIN_ESCL "bb_escl.so"
+ #define SCAN_PLUGIN_ORBLITE "bb_orblite.so"
+ 
+-#define HPLIP_PLUGIN_STATE  "/var/lib/hp/hplip.state"
++#define HPLIP_PLUGIN_STATE  "/var/lib/hplip-printer-app/hplip.state"
+ #define CUPS_TMP_DIR   getenv("TMPDIR") ? : getenv("HOME") ?:"/tmp"
+ 
+ enum UTILS_CONF_RESULT
+diff --git a/common/utils.c b/common/utils.c
+--- a/common/utils.c
++++ b/common/utils.c
+@@ -225,6 +225,9 @@ void *load_plugin_library (enum UTILS_PLUGIN_LIBRARY_TYPE eLibraryType, const ch
+         return pHandler;
+     }
+ 
++    if (eLibraryType == UTILS_PRINT_PLUGIN_LIBRARY)
++        snprintf(szLibraryFile, sizeof(szLibraryFile), "/var/lib/hplip-printer-app/plugin/%s", szPluginName);
++
+     return load_library (szLibraryFile);
+     
+ }
+diff --git a/base/g.py b/base/g.py
+--- a/base/g.py
++++ b/base/g.py
+@@ -192,14 +192,12 @@ class SysConfig(ConfigBase):
+         ConfigBase.__init__(self, '/etc/hp/hplip.conf')
+ 
+ 
+ class State(ConfigBase):
+     def __init__(self):
+-        if not os.path.exists('/var/lib/hp/') and os.geteuid() == 0:
+-            os.makedirs('/var/lib/hp/')
+-            cmd = 'chmod 755 /var/lib/hp/'
+-            os_utils.execute(cmd)
+-        ConfigBase.__init__(self, '/var/lib/hp/hplip.state')
++        state_dir = '/var/lib/hplip-printer-app'
++        os.makedirs(state_dir, mode=0o700, exist_ok=True)
++        ConfigBase.__init__(self, os.path.join(state_dir, 'hplip.state'))
+ 
+ 
+ class UserConfig(ConfigBase):
+     def __init__(self):
+diff --git a/base/device.py b/base/device.py
+--- a/base/device.py
++++ b/base/device.py
+@@ -2535,7 +2535,7 @@ class Device(object):
+ 
+     def downloadFirmware(self, usb_bus_id=None, usb_device_id=None): # Note: IDs not currently used
+         ok = False
+-        filename = os.path.join(prop.data_dir, "firmware", self.model.lower() + '.fw.gz')
++        filename = os.path.join('/var/lib/hplip-printer-app/plugin', self.model.lower() + '.fw.gz')
+         log.debug(filename)
+ 
+         if os.path.exists(filename):

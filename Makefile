@@ -64,6 +64,9 @@ endif
 ifdef SNAP
 CFLAGS		+=	-DSNAP=$(SNAP)
 endif
+ifdef HPLIP_OCI
+CFLAGS          +=      -DHPLIP_OCI=1
+endif
 LDFLAGS		+=	$(OPTIM) `cups-config --ldflags`
 LIBS		+=	`pkg-config --libs pappl` `cups-config --image --libs` `pkg-config --libs libppd` `pkg-config --libs libcupsfilters` `pkg-config --libs libpappl-retrofit` `pkg-config --libs libcurl` `pkg-config --libs libcrypto`
 

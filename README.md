@@ -49,6 +49,65 @@ generally use driverless IPP via USB, try
 first.
 
 
+## Project Bluefin FSDK OCI appliance
+
+Upstream `snap/` and `rockcraft.yaml` remain as source references, but this
+fork builds and releases only the BuildStream OCI image.
+It builds the Debian-patched HPLIP print drivers (`hpcups`, `hpps`, `hp`, `HP`,
+`hp-probe` and their PPDs) against the pinned Ghostscript freedesktop-sdk
+junction. The junction supplies the one patched CUPS source and PAPPL stack;
+the image does not start `cupsd`. This appliance is **print-only**. A
+socket-sink print job is not evidence of scanning, firmware upload to real
+hardware or paper output.
+
+On native x86_64 or aarch64, with Podman, FUSE and `just` available:
+
+```sh
+just validate
+just fetch
+just verify
+```
+
+`just verify` builds the actual OCI image, starts it as numeric user 65532,
+prints through PAPPL, `hpcups` and the CUPS socket backend into a TCP sink,
+then checks the PCL raster output and persisted state. It also checks HTTPS,
+supervised D-Bus/Avahi shutdown and required-child failure. The service uses
+port 18030 by default; assign a different unprivileged `PORT` for each
+simultaneously running printer family.
+
+For a rootless deployment, dedicate a volume to **this** application:
+
+```sh
+mkdir -p hplip-state
+podman unshare chown 65532:65532 hplip-state
+podman run --name hplip-printer-app --network host \
+  --hostname hplip-printer-app -e PORT=18030 \
+  -v "$PWD/hplip-state:/var/lib/hplip-printer-app:Z" \
+  ghcr.io/projectbluefin/hplip-printer-app:3.26.4
+```
+
+Persist the same volume across restarts. The web UI is available at
+`https://localhost:18030/`; HP's proprietary plugin is opt-in under `/plugin`.
+The rootless application downloads it only after web consent, checks HP's
+published size, checksum and GPG signature using the public key from the
+Debian source, and installs it into the volume. Neither the plugin nor its
+firmware is part of the image. Keep the volume private to its numeric owner.
+Network/USB discovery requires permissions and a reachable network; if an HP
+USB printer is assigned, pass **only** its `/dev/bus/usb` device with Podman's
+`--device` and grant the mapped user device access (for example via host udev
+group ownership plus `--group-add keep-groups`). Never assign the same device
+to another printer family's appliance. With `--network host`, give each
+appliance a different port and hostname so DNS-SD advertisements do not
+collide. Physical device discovery, plugin firmware load and paper output
+remain unverified without supported hardware.
+
+PRs target `testing`; after a verified commit is promoted to `stable`, only
+the matching `v<VERSION>` tag can publish an immutable amd64+arm64 GHCR index
+with a signed SPDX SBOM and provenance. There are no mutable OCI `latest`,
+`edge` or `stable` aliases. The org Renovate runner updates the HPLIP source
+tag, application version and local Net-SNMP pin on `testing`; no inherited
+Snap/Rockcraft workflow can update `stable`. Failed image checks block release.
+
 ### Properties
 
 - A Printer Application providing the `hpcups` printer driver and all
@@ -398,7 +457,7 @@ also often get polled from the printer.
   - libcupsfilters 2.1.1
   - libppd 2.1.1
   - pyppd release-1-1-0
-  - hplip debian/3.22.10+dfsg0-8
+  - hplip debian/3.26.4+dfsg0-3
 <!-- End Included Components -->
 
 ## BUILDING WITHOUT PACKAGING OR INSTALLATION
