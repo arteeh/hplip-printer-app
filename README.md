@@ -310,6 +310,19 @@ this, click on the "Plugin" button in this printer entry or on the
 front page of the web interface and follow the instructions on the
 screen.
 
+**Architecture note:** HP's vendor plugin archive bundles separate
+`.so` files per CPU architecture (tagged internally as `x86_64`,
+`x86_32`, `arm32`, or `arm64`), and only the file matching the
+architecture of the running OCI image (`amd64`/`x86_64` or
+`arm64`/`aarch64`) gets linked in. Not every vendor plugin release has
+historically shipped `arm64` builds for every printer-support
+component, so some HP models that require the proprietary plugin may
+work on `amd64` but not yet be usable through the plugin path on
+`arm64` if HP's archive lacks an `arm64` build for the needed
+component. If no library file matches the running architecture, plugin
+installation now fails explicitly instead of silently reporting
+success.
+
 Then print PDF, PostScript, JPEG, Apple Raster, or PWG Raster files
 with
 

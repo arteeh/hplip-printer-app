@@ -1044,6 +1044,7 @@ hplip_install_plugin(pappl_system_t *system, const char *plugin_dir)
   struct dirent *entry;
   struct stat st;
   char *p, *version = NULL;
+  int arch_matches = 0;
 
   // Open the directory with the files of the uncompressed plugin
   len = snprintf(buf1, sizeof(buf1), "%s/plugin_tmp", plugin_dir);
@@ -1055,7 +1056,16 @@ hplip_install_plugin(pappl_system_t *system, const char *plugin_dir)
   }
 
   // Go through all the files of the plugin, and for the dynamic link
-  // libraries (*.so files) link the ones of our system's architecture
+  // libraries (*.so files) link the ones of our system's architecture.
+  // HPLIP's vendor archive tags files as "<component>-<ARCH>.so[.version]"
+  // where ARCH is one of "x86_32", "x86_64", "arm32", "arm64" (the same
+  // labels this Printer Application uses, see the ARCH macro above), not
+  // OCI/Debian-style "amd64"/"arm64" triplets. If a vendor bundle ever
+  // uses different aliases for our architecture, or simply lacks any
+  // files for it (this has historically been true for some
+  // ARM-only-partial vendor bundles), zero symlinks get created and the
+  // plugin silently ends up non-functional; make that failure loud
+  // instead of quietly continuing as if the plugin were fully installed.
   papplLog(system, PAPPL_LOGLEVEL_DEBUG,
 	   "Adding symlinks for dynamic link libraries of the %s architecture in %s", ARCH, buf1);
   buf1[len] = '/';
@@ -1079,9 +1089,20 @@ hplip_install_plugin(pappl_system_t *system, const char *plugin_dir)
 	closedir(d);
 	goto out;
       }
+      arch_matches ++;
     }
   }
   closedir(d);
+
+  if (arch_matches == 0)
+  {
+    papplLog(system, PAPPL_LOGLEVEL_ERROR,
+	     "No plugin library files matching architecture \"%s\" were found "
+	     "in %s/plugin_tmp; the downloaded vendor plugin does not support "
+	     "this architecture, refusing to report the plugin as installed",
+	     ARCH, plugin_dir);
+    goto out;
+  }
 
   // Resolve the version before touching a working installation.
   if ((version = hplip_version(system)) == NULL)
