@@ -15,11 +15,10 @@ if [ ! -f $CUPS_SERVERROOT/snmp.conf ]; then
     cp $BACKEND_DIR/snmp.conf $CUPS_SERVERROOT 2>/dev/null || :
 fi
 
-# Import HP's public key to veryfy the downlaoded archive of the proprietary
-# plugin
+# Keep the existing HOME for HP utilities; plugin verification has its own
+# private persistent GPG home managed by the application.
 export HOME=$SNAP_COMMON/tmp
 mkdir -p $SNAP_COMMON/tmp
-gpg --homedir ~ --no-permission-warning --import $SNAP/usr/share/hplip/signing-key.asc
 
 # Start the Printer Application, in the background
 exec $SNAP/scripts/run-hplip-printer-app -o log-file=$SNAP_COMMON/hplip-printer-app.log server "$@" &

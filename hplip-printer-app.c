@@ -26,6 +26,7 @@
 #include <pthread.h>
 #include <fcntl.h>
 #include <linux/fs.h>
+#include "hplip-plugin-verify.h"
 
 //
 // Constants...
@@ -666,7 +667,7 @@ hplip_download_plugin(pappl_system_t *system)
        *checksum = NULL,
        *uncompress_dir = NULL,
        *ret = NULL;
-  FILE *fp;
+  FILE *fp = NULL;
   size_t plugin_size;
   char buf[1024];
   struct stat st;
@@ -675,6 +676,7 @@ hplip_download_plugin(pappl_system_t *system)
   SHA_CTX ctx;
   unsigned char hash[SHA_DIGEST_LENGTH];
   int status;
+  const char *state_dir;
 
 
   // Get plugin index file from HP
@@ -730,6 +732,7 @@ hplip_download_plugin(pappl_system_t *system)
   }
 
   fclose(fp);
+  fp = NULL;
 #if HPLIP_OCI
   // HP's index still advertises HTTP for older releases. Upgrade its known
   // OpenPrinting mirror before downloading, and reject other plaintext URLs.
@@ -784,7 +787,8 @@ hplip_download_plugin(pappl_system_t *system)
   }
 
   // Determine size of the downloaded plugin
-  stat(plugin_file, &st);
+  if (stat(plugin_file, &st) != 0)
+    goto out;
   if (st.st_size != plugin_size)
   {
     papplLog(system, PAPPL_LOGLEVEL_ERROR,
@@ -799,9 +803,13 @@ hplip_download_plugin(pappl_system_t *system)
   // Verify sha1sum of the plugin file against the checksum from the index file
   SHA1_Init(&ctx);
   fd = open(plugin_file, O_RDONLY);
+  if (fd < 0)
+    goto out;
   while ((bytes = read(fd, buf, sizeof(buf))) > 0)
     SHA1_Update(&ctx, buf, bytes);
   close(fd);
+  if (bytes < 0)
+    goto out;
   SHA1_Final(hash, &ctx);
   for (i = 0; i < SHA_DIGEST_LENGTH; i ++)
     snprintf(buf + 2 * i, 3, "%.2x", hash[i]);
@@ -817,37 +825,18 @@ hplip_download_plugin(pappl_system_t *system)
     papplLog(system, PAPPL_LOGLEVEL_DEBUG,
 	     "Downloaded file checksum OK (%s).", buf);
 
-  // Check GPG signature
-
-  // We do not load HP's public key here (which is needed ofr verification), as
-  // HP's original command does not work.
-  // Command as of HPLIP 3.21.8:
-  //   gpg --homedir ~ --no-permission-warning --keyserver pgp.mit.edu --recv-keys 0x4ABA2F66DBD5A95894910E0673D770CDA59047B9
-  // So the actual command depends on the source code in use and how it got
-  // patched. For Debian/Ubuntu it is (key got added to the package):
-  //   gpg --homedir ~ --no-permission-warning --import /usr/share/hplip/signing-key.asc
-  // Please add a suitable command to the start-up script for this Printer Application
-
-  snprintf(buf, sizeof(buf),
-	   "gpg --homedir ~ --no-permission-warning --verify %s %s 2>&1",
-	   signature_file, plugin_file);
-  papplLog(system, PAPPL_LOGLEVEL_DEBUG,
-	   "Verifying plugin's signature.");
-
-  if ((status = hplip_run_command_line(system, buf)) != 0)
+  // Only the packaged HP key may authorize executing the downloaded archive.
+  // Keep GPG state private and persistent, separate from the user's keyring.
+  state_dir = getenv("STATE_DIR");
+  if (!state_dir || !*state_dir)
+    state_dir = HPLIP_APP_STATE_DIR;
+  if (snprintf(buf, sizeof(buf), "%s/plugin-gnupg", state_dir) >= sizeof(buf) ||
+      !hplip_verify_plugin(buf, HPLIP_SIGNING_KEY,
+                           "4ABA2F66DBD5A95894910E0673D770CDA59047B9",
+                           signature_file, plugin_file))
   {
     papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "Plugin signature verification failed.");
-    papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "NOTE: If this failure is due to a missing public key, we do not load the");
-    papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "public key here as this step can vary with the used HPLIP source code.");
-    papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "The command used in the original source code of HPLIP (3.21.8)");
-    papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "  gpg --homedir ~ --no-permission-warning --keyserver pgp.mit.edu --recv-keys 0x4ABA2F66DBD5A95894910E0673D770CDA59047B9");
-    papplLog(system, PAPPL_LOGLEVEL_ERROR,
-	     "does not work.");
+             "Plugin signature verification failed; no plugin was extracted.");
     goto out;
   }
 
@@ -893,6 +882,8 @@ hplip_download_plugin(pappl_system_t *system)
  out:
 
   // Clean up
+  if (fp)
+    fclose(fp);
   if (plugin_conf)
   {
     unlink(plugin_conf);

@@ -1,0 +1,46 @@
+name: HP plugin signature verification
+
+on:
+  pull_request:
+    branches: [testing]
+  push:
+    branches: [testing]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Fetch official verification fixtures (never execute the archive)
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixtures="$RUNNER_TEMP/hp-signature-fixtures"
+          mkdir -p "$fixtures"
+          curl --fail --location --proto '=https' --proto-redir '=https' --retry 3 \
+            https://salsa.debian.org/printing-team/hplip.v2/-/raw/f27f786d5f1060cce7c92e42488bd5e5d00ba135/debian/upstream/signing-key.asc \
+            -o "$fixtures/signing-key.asc"
+          for suffix in run run.asc; do
+            curl --fail --location --proto '=https' --proto-redir '=https' --retry 3 \
+              "https://www.openprinting.org/download/printdriver/auxfiles/HP/plugins/hplip-3.22.10-plugin.$suffix" \
+              -o "$fixtures/plugin.$suffix"
+          done
+          chmod -R a+rX "$fixtures"
+      - name: Verify offline as the OCI runtime UID
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixtures="$RUNNER_TEMP/hp-signature-fixtures"
+          # All verification, including first key import, runs without networking.
+          sudo unshare --net -- setpriv --reuid=65532 --regid=65532 --clear-groups \
+            env HP_PLUGIN="$fixtures/plugin.run" \
+              HP_PLUGIN_SIGNATURE="$fixtures/plugin.run.asc" \
+              HP_SIGNING_KEY="$fixtures/signing-key.asc" \
+              python3 tests/test-plugin-verification.py
+      - name: Remove proprietary test bytes
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/hp-signature-fixtures"
