@@ -26,13 +26,14 @@ cupsserverbin	=	`cups-config  --serverbin`
 unitdir 	=	`pkg-config --variable=systemdsystemunitdir systemd`
 HPLIP_CONF_DIR  =       $(sysconfdir)/hp
 HPLIP_PLUGIN_STATE_DIR = $(localstatedir)/lib/hp
+HPLIP_PLUGIN_STATE_SCRIPT = $(resourcedir)/hplip-plugin-state.sh
 
 HPLIP_SIGNING_KEY = $(prefix)/share/hplip/signing-key.asc
 HPLIP_APP_STATE_DIR = $(statedir)
 
 # Compiler/linker options...
 OPTIM		=	-Os -g
-DIRS		=	-DHPLIP_CONF_DIR=\"$(HPLIP_CONF_DIR)\" -DHPLIP_PLUGIN_STATE_DIR=\"$(HPLIP_PLUGIN_STATE_DIR)\"
+DIRS		=	-DHPLIP_CONF_DIR=\"$(HPLIP_CONF_DIR)\" -DHPLIP_PLUGIN_STATE_DIR=\"$(HPLIP_PLUGIN_STATE_DIR)\" -DHPLIP_PLUGIN_STATE_SCRIPT=\"$(HPLIP_PLUGIN_STATE_SCRIPT)\"
 DIRS += -DHPLIP_SIGNING_KEY=\"$(HPLIP_SIGNING_KEY)\" -DHPLIP_APP_STATE_DIR=\"$(HPLIP_APP_STATE_DIR)\"
 ifdef HPLIP_PLUGIN_ALT_DIR
 DIRS		+=	-DHPLIP_PLUGIN_ALT_DIR=\"$(HPLIP_PLUGIN_ALT_DIR)\"
@@ -76,7 +77,7 @@ LIBS		+=	`pkg-config --libs pappl` `cups-config --image --libs` `pkg-config --li
 
 
 # Targets...
-OBJS		=	hplip-printer-app.o hplip-plugin-verify.o
+OBJS		=	hplip-printer-app.o hplip-plugin-verify.o hplip-download-policy.o
 TARGETS		=	hplip-printer-app
 
 
@@ -102,6 +103,8 @@ install:	$(TARGETS)
 	mkdir -p $(DESTDIR)$(spooldir)
 	mkdir -p $(DESTDIR)$(resourcedir)
 	cp testpage.ps $(DESTDIR)$(resourcedir)
+	cp scripts/hplip-plugin-state.sh $(DESTDIR)$(resourcedir)
+	chmod 755 $(DESTDIR)$(resourcedir)/hplip-plugin-state.sh
 	if test "x$(cupsserverbin)" != x && [ -d $(cupsserverbin) ]; then \
 	  mkdir -p $(DESTDIR)$(libdir); \
 	  touch $(DESTDIR)$(serverbin) 2> /dev/null || :; \
@@ -123,4 +126,4 @@ install:	$(TARGETS)
 hplip-printer-app:	$(OBJS)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(LIBS)
 
-$(OBJS):	Makefile hplip-plugin-verify.h
+$(OBJS):	Makefile hplip-plugin-verify.h hplip-download-policy.h
