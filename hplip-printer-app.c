@@ -1405,6 +1405,17 @@ hplip_web_plugin(
     }
     else if (!strcmp(action, "remove-plugin-yes"))
     {
+      // Serialize plugin removal with install/update: a remove can race an
+      // in-flight install that is mid-rename on the same plugin/ path, so it
+      // takes the same lock as install (acceptance criteria #1).
+      plugin_locked = 1;
+      if (!g_mutex_trylock(&plugin_install_mutex))
+      {
+        plugin_locked = 0;
+        status = "A plugin installation is already running. Please wait a moment and try again.";
+      }
+      else
+      {
       // Remove the plugin
       // If failed, get back to plugin status page
       status = "Plugin removal failed.";
@@ -1433,6 +1444,7 @@ hplip_web_plugin(
 	else
 	  papplLog(system, PAPPL_LOGLEVEL_ERROR,
 		   "Could not find/the directory with the installed plugin.");
+      }
       }
     }
 #endif
