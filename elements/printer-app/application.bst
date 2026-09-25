@@ -30,6 +30,7 @@ depends:
 config:
   build-commands:
     - make -j2 VERSION="$(cat VERSION)" HPLIP_OCI=1 HPLIP_PLUGIN_STATE_DIR=/var/lib/hplip-printer-app HPLIP_PLUGIN_ALT_DIR=/var/lib/hplip-printer-app LDFLAGS="$LDFLAGS -ljpeg"
+    - gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite -sOutputFile=testpage.pdf testpage.ps
   install-commands:
     - make DESTDIR="%{install-root}" VERSION="$(cat VERSION)" HPLIP_OCI=1 HPLIP_PLUGIN_STATE_DIR=/var/lib/hplip-printer-app HPLIP_PLUGIN_ALT_DIR=/var/lib/hplip-printer-app LDFLAGS="$LDFLAGS -ljpeg" unitdir= install
-    - install -D -m 0644 /usr/share/legacy-printer-app/testpage.pdf "%{install-root}/usr/share/hplip-printer-app/testpage.pdf"
+    - install -D -m 0644 testpage.pdf "%{install-root}/usr/share/hplip-printer-app/testpage.pdf"
