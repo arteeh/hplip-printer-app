@@ -1,5 +1,8 @@
 name: Push new tag update to stable branch
 
+permissions:
+  contents: write # desktop-snaps pushes version bumps
+
 on:
   schedule:
     - cron: '9 7 * * *'
@@ -20,11 +23,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout this repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Run desktop-snaps action (Snapcraft)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.workflow_choice == 'snapcraft' || github.event.inputs.workflow_choice == 'both' }}
-        uses: ubuntu/desktop-snaps@stable
+        uses: ubuntu/desktop-snaps@c61268a4fb737f43c2a15050155b9606716c5a18 # stable
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           repo: ${{ github.repository }}
@@ -32,7 +35,7 @@ jobs:
 
       - name: Run desktop-snaps action (Rockcraft)
         if: ${{ github.event_name == 'schedule' || github.event.inputs.workflow_choice == 'rockcraft' || github.event.inputs.workflow_choice == 'both' }}
-        uses: ubuntu/desktop-snaps@stable
+        uses: ubuntu/desktop-snaps@c61268a4fb737f43c2a15050155b9606716c5a18 # stable
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           repo: ${{ github.repository }}
